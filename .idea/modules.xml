@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/IAT.iml" filepath="$PROJECT_DIR$/.idea/IAT.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../IAT_2/.idea/IAT_2.iml" filepath="$PROJECT_DIR$/../IAT_2/.idea/IAT_2.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../.idea/JupyterNotebooks.iml" filepath="$PROJECT_DIR$/../.idea/JupyterNotebooks.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../../2022-2/ML/.idea/ML.iml" filepath="$PROJECT_DIR$/../../2022-2/ML/.idea/ML.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../../2022-1/Énfasis/.idea/Énfasis.iml" filepath="$PROJECT_DIR$/../../2022-1/Énfasis/.idea/Énfasis.iml" />
+    </modules>
+  </component>
+</project>
