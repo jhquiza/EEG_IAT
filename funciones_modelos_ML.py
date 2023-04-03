@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, PowerTransformer, LabelEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
@@ -8,10 +9,15 @@ from sklearn.mixture import GaussianMixture
 from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
 from sklearn.inspection import permutation_importance
 from mango import Tuner, scheduler
+from mango.domain.distribution import loguniform
 from scipy.stats import uniform
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.svm import SVC
 from xgboost import XGBClassifier
 
-# Ajuste modelos de clustering
+# Ajuste modelos de clustering KMeans
 def clusters_kmeans(data, max_clusters=10):
     inertias = []
     sil_scores = []
@@ -30,6 +36,7 @@ def clusters_kmeans(data, max_clusters=10):
         dav_scores.append(dav)
     return inertias, sil_scores, cal_scores, dav_scores
 
+# Ajuste modelos de clustering Gaussian Mixture
 def clusters_gaussian(data, max_clusters=10):
     gauss_scores = []
     sil_scores = []
@@ -48,6 +55,7 @@ def clusters_gaussian(data, max_clusters=10):
         dav_scores.append(dav)
     return gauss_scores, sil_scores, cal_scores, dav_scores
 
+# Ajuste modelos de clustering Spectral
 def clusters_spectral(data, max_clusters=10):
     sil_scores = []
     cal_scores = []
@@ -63,19 +71,17 @@ def clusters_spectral(data, max_clusters=10):
         dav_scores.append(dav)
     return sil_scores, cal_scores, dav_scores
 
-def val_test_scores(model):
-    global X_train, y_train_label, X_test, y_test_label
+# Cálculo de scores de validación y prueba
+def val_test_scores(model, X_train, y_train_label, X_test, y_test_label):
     scores = cross_val_score(estimator = model, X= X_train, y= y_train_label, scoring='accuracy', cv=5)
     model.fit(X_train, y_train_label)
     test_score = model.score(X_test, y_test_label)
     return scores, test_score
 
-def modelo_xgboost_np(param_space):
-    global X_train, y_train_label, X_test, y_test_label
-    # Modelo XGBoosting sin preprocesar datos
+# Ajuste modelos XGBoosting
+def modelo_xgboost_np(X_train, y_train_label, X_test, y_test_label, param_space):
     @scheduler.parallel(n_jobs=-1)
     def objective(**params):
-        global X_train, y_train_label
         model = XGBClassifier(**params)
         score= cross_val_score(estimator = model, X= X_train, y= y_train_label, scoring='accuracy', cv=5).mean()
         return score
@@ -86,14 +92,12 @@ def modelo_xgboost_np(param_space):
     # Scores de validación y prueba
     params = best_results['best_params']
     model = XGBClassifier(**params)
-    scores, test_score = val_test_scores(model=model)
+    scores, test_score = val_test_scores(model=model, X_train=X_train, y_train_label=y_train_label, X_test=X_test, y_test_label=y_test_label)
     return params, scores, test_score
 
-def modelo_xgboost_sc(param_space, preprocessor):
-    global X_train, y_train_label, X_test, y_test_label
+def modelo_xgboost_sc(X_train, y_train_label, X_test, y_test_label, param_space, preprocessor):
     @scheduler.parallel(n_jobs=-1)
     def objective(**params):
-        global X_train, y_train_label, preprocessor
         model = Pipeline([('preprocessing', preprocessor),('xg', XGBClassifier(**params))])
         score = cross_val_score(estimator = model, X= X_train, y= y_train_label, scoring='accuracy', cv=5).mean()
         return score
@@ -103,7 +107,7 @@ def modelo_xgboost_sc(param_space, preprocessor):
     print('best accuracy:', best_results['best_objective'])
     params = best_results['best_params']
     model = Pipeline([('preprocessing', preprocessor),('xg', XGBClassifier(**params))])
-    scores, test_score = val_test_scores(model=model)
+    scores, test_score = val_test_scores(model=model, X_train=X_train, y_train_label=y_train_label, X_test=X_test, y_test_label=y_test_label)
     return params, scores, test_score
 
 # Extracción sujetos mal clasificados
@@ -210,3 +214,184 @@ def errores(model, label, X_train, y_train, X_test, y_test):
     # concatenación de errores
     df_errados = pd.concat([df_errados, test_errados_df], ignore_index=False)
     return df_errados
+
+# Función para obtener el mejor modelo de clasificación sin preprocesar
+def get_best_model_np(X_train, y_train_label, X_test, y_test_label):
+    
+    param_space_lr = dict(C=loguniform(-4,2), penalty=['l1','l2'])
+    param_space_knn = dict(n_neighbors=np.arange(1, 20), weights=['uniform','distance'], p=[1,2])
+    param_space_rf = dict(n_estimators=np.arange(1, 100), ccp_alpha=loguniform(-4,6))
+    param_space_gb = dict(n_estimators=np.arange(1, 100), ccp_alpha=loguniform(-4,6), subsample=uniform(0,1))
+    param_space_svc = dict(gamma=uniform(0, 1), C=loguniform(-4,8), kernel=['poly','rbf','sigmoid'], degree=range(1,5))
+    param_space_xg =dict(n_estimators=range(1,100), max_depth=range(3,10), subsample=uniform(0.1,0.9), eta=uniform(0,1), colsample_bytree=uniform(0.1,0.9))
+
+    def objective_lr(args_list):
+        results = []
+        for hyper_par in args_list:
+            clf = LogisticRegression(solver='saga', max_iter=10000, random_state=72)
+            clf.set_params(**hyper_par)
+            result = cross_val_score(clf, X_train, y_train_label, scoring='accuracy', cv=5).mean()
+            results.append(result)
+        return results
+
+    def objective_knn(args_list):
+        results = []
+        for hyper_par in args_list:
+            clf = KNeighborsClassifier()
+            clf.set_params(**hyper_par)
+            result = cross_val_score(clf, X_train, y_train_label, scoring='accuracy', cv=5).mean()
+            results.append(result)
+        return results
+
+    def objective_rf(args_list):
+        results = []
+        for hyper_par in args_list:
+            clf = RandomForestClassifier(random_state=72)
+            clf.set_params(**hyper_par)
+            result = cross_val_score(clf, X_train, y_train_label, scoring='accuracy', cv=5).mean()
+            results.append(result)
+        return results
+
+    def objective_gb(args_list):
+        results = []
+        for hyper_par in args_list:
+            clf = GradientBoostingClassifier(random_state=72)
+            clf.set_params(**hyper_par)
+            result = cross_val_score(clf, X_train, y_train_label, scoring='accuracy', cv=5).mean()
+            results.append(result)
+        return results
+
+    def objective_svc(args_list):
+        results = []
+        for hyper_par in args_list:
+            clf = SVC(random_state=72)
+            clf.set_params(**hyper_par)
+            result = cross_val_score(clf, X_train, y_train_label, scoring='accuracy', cv=5).mean()
+            results.append(result)
+        return results
+
+    def objective_xg(args_list):
+        results = []
+        for hyper_par in args_list:
+            clf = XGBClassifier()
+            clf.set_params(**hyper_par)
+            result = cross_val_score(clf, X_train, y_train_label, scoring='accuracy', cv=5).mean()
+            results.append(result)
+        return results
+
+    param_space_list = [param_space_lr, param_space_knn, param_space_rf, param_space_gb, param_space_svc, param_space_xg]
+    objective_list = [objective_lr, objective_knn, objective_rf, objective_gb, objective_svc, objective_xg]
+    model_names = ['Logistic Regression', 'KNN', 'Random Forest', 'Gradient Boosting', 'SVC', 'XGBoost']
+
+    conf_dict = dict(num_iteration=40, domain_size=10000, initial_random=3)
+    best_results = pd.DataFrame(index=['model', 'hiperparameters', 'mean cv score', 'std cv score', 'test score'])
+    model_list = [LogisticRegression(solver='saga', max_iter=10000, random_state=72), KNeighborsClassifier(), RandomForestClassifier(random_state=72), GradientBoostingClassifier(random_state=72), SVC(random_state=72), XGBClassifier()]
+    for i in range(len(param_space_list)):
+        param_space = param_space_list[i]
+        objective = objective_list[i]
+        model_name = model_names[i]
+        tuner = Tuner(param_space, objective, conf_dict)
+        print(tuner)
+        best_model_results = tuner.maximize()
+        params = best_model_results['best_params']
+        model = model_list[i]
+        model.set_params(**params)
+        scores, test_score = val_test_scores(model=model, X_train=X_train, y_train_label=y_train_label, X_test=X_test, y_test_label=y_test_label)
+        temp = pd.DataFrame(data=[model_name, params, scores.mean(), scores.std(), test_score], index=['model', 'hiperparameters', 'mean cv score', 'std cv score', 'test score'])
+        best_results = pd.concat([best_results, temp], axis=1)
+    best_results = best_results.T
+    best_results.set_index('model', inplace=True)
+    return best_results
+
+# Función para obtener el mejor modelo con preprocesamiento
+def get_best_model_sc(preprocessor, model_names, X_train, y_train_label, X_test, y_test_label):
+
+    param_space_lr = dict(C=loguniform(-4,2), penalty=['l1','l2'])
+    param_space_knn = dict(n_neighbors=np.arange(1, 20), weights=['uniform','distance'], p=[1,2])
+    param_space_rf = dict(n_estimators=np.arange(1, 100), ccp_alpha=loguniform(-4,6))
+    param_space_gb = dict(n_estimators=np.arange(1, 100), ccp_alpha=loguniform(-4,6), subsample=uniform(0,1))
+    param_space_svc = dict(gamma=uniform(0, 1), C=loguniform(-4,8), kernel=['poly','rbf','sigmoid'], degree=range(1,5))
+    param_space_xg =dict(n_estimators=range(1,100), max_depth=range(3,10), subsample=uniform(0.1,0.9), eta=uniform(0,1), colsample_bytree=uniform(0.1,0.9))
+
+    def objective_lr(args_list):
+        results = []
+        for hyper_par in args_list:
+            clf = LogisticRegression(solver='saga', max_iter=10000, random_state=72)
+            clf.set_params(**hyper_par)
+            pipe = Pipeline([('preprocessing', preprocessor),('clf',clf)])
+            result = cross_val_score(pipe, X_train, y_train_label, scoring='accuracy', cv=5).mean()
+            results.append(result)
+        return results
+
+    def objective_knn(args_list):
+        results = []
+        for hyper_par in args_list:
+            clf = KNeighborsClassifier()
+            clf.set_params(**hyper_par)
+            pipe = Pipeline([('preprocessing', preprocessor),('clf',clf)])
+            result = cross_val_score(pipe, X_train, y_train_label, scoring='accuracy', cv=5).mean()
+            results.append(result)
+        return results
+
+    def objective_rf(args_list):
+        results = []
+        for hyper_par in args_list:
+            clf = RandomForestClassifier(random_state=72)
+            clf.set_params(**hyper_par)
+            pipe = Pipeline([('preprocessing', preprocessor),('clf',clf)])
+            result = cross_val_score(pipe, X_train, y_train_label, scoring='accuracy', cv=5).mean()
+            results.append(result)
+        return results
+
+    def objective_gb(args_list):
+        results = []
+        for hyper_par in args_list:
+            clf = GradientBoostingClassifier(random_state=72)
+            clf.set_params(**hyper_par)
+            pipe = Pipeline([('preprocessing', preprocessor),('clf',clf)])
+            result = cross_val_score(pipe, X_train, y_train_label, scoring='accuracy', cv=5).mean()
+            results.append(result)
+        return results
+
+    def objective_svc(args_list):
+        results = []
+        for hyper_par in args_list:
+            clf = SVC(random_state=72)
+            clf.set_params(**hyper_par)
+            pipe = Pipeline([('preprocessing', preprocessor),('clf',clf)])
+            result = cross_val_score(pipe, X_train, y_train_label, scoring='accuracy', cv=5).mean()
+            results.append(result)
+        return results
+
+    def objective_xg(args_list):
+        results = []
+        for hyper_par in args_list:
+            clf = XGBClassifier()
+            clf.set_params(**hyper_par)
+            pipe = Pipeline([('preprocessing', preprocessor),('clf',clf)])
+            result = cross_val_score(pipe, X_train, y_train_label, scoring='accuracy', cv=5).mean()
+            results.append(result)
+        return results
+
+    param_space_list = [param_space_lr, param_space_knn, param_space_rf, param_space_gb, param_space_svc, param_space_xg]
+    objective_list = [objective_lr, objective_knn, objective_rf, objective_gb, objective_svc, objective_xg]
+    
+    conf_dict = dict(num_iteration=40, domain_size=10000, initial_random=3)
+    best_results = pd.DataFrame(index=['model', 'hiperparameters', 'mean cv score', 'std cv score', 'test score'])
+    model_list = [LogisticRegression(solver='saga', max_iter=10000, random_state=72), KNeighborsClassifier(), RandomForestClassifier(random_state=72), GradientBoostingClassifier(random_state=72), SVC(random_state=72), XGBClassifier()]
+    for i in range(len(param_space_list)):
+        param_space = param_space_list[i]
+        objective = objective_list[i]
+        model_name = model_names[i]
+        tuner = Tuner(param_space, objective, conf_dict)
+        best_model_results = tuner.maximize()
+        params = best_model_results['best_params']
+        clf= model_list[i]
+        clf.set_params(**params)
+        model = Pipeline([('preprocessing', preprocessor),('clf', clf)])
+        scores, test_score = val_test_scores(model=model, X_train=X_train, y_train_label=y_train_label, X_test=X_test, y_test_label=y_test_label)
+        temp = pd.DataFrame(data=[model_name, params, scores.mean(), scores.std(), test_score], index=['model', 'hiperparameters', 'mean cv score', 'std cv score', 'test score'])
+        best_results = pd.concat([best_results, temp], axis=1)
+    best_results = best_results.T
+    best_results.set_index('model', inplace=True)
+    return best_results
