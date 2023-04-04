@@ -14,7 +14,8 @@ from scipy.stats import uniform
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.svm import SVC
+from sklearn.svm import SVC, LinearSVC
+from sklearn.feature_selection import SelectFromModel, f_classif, mutual_info_classif
 from xgboost import XGBClassifier
 
 # Ajuste modelos de clustering KMeans
@@ -78,7 +79,7 @@ def val_test_scores(model, X_train, y_train_label, X_test, y_test_label):
     test_score = model.score(X_test, y_test_label)
     return scores, test_score
 
-# Ajuste modelos XGBoosting
+# Ajuste modelos XGBoosting sin preprocesar
 def modelo_xgboost_np(X_train, y_train_label, X_test, y_test_label, param_space):
     @scheduler.parallel(n_jobs=-1)
     def objective(**params):
@@ -95,6 +96,7 @@ def modelo_xgboost_np(X_train, y_train_label, X_test, y_test_label, param_space)
     scores, test_score = val_test_scores(model=model, X_train=X_train, y_train_label=y_train_label, X_test=X_test, y_test_label=y_test_label)
     return params, scores, test_score
 
+# Ajuste modelos XGBoosting con preprocesado
 def modelo_xgboost_sc(X_train, y_train_label, X_test, y_test_label, param_space, preprocessor):
     @scheduler.parallel(n_jobs=-1)
     def objective(**params):
@@ -109,41 +111,6 @@ def modelo_xgboost_sc(X_train, y_train_label, X_test, y_test_label, param_space,
     model = Pipeline([('preprocessing', preprocessor),('xg', XGBClassifier(**params))])
     scores, test_score = val_test_scores(model=model, X_train=X_train, y_train_label=y_train_label, X_test=X_test, y_test_label=y_test_label)
     return params, scores, test_score
-
-# Extracción sujetos mal clasificados
-def errores(model, label):
-    global X_train, y_train, X_test, y_test
-    skf = StratifiedKFold(n_splits=5)
-
-    le = LabelEncoder()
-    le.fit(y_train)
-    y_train_label = le.fit_transform(y_train)
-    y_test_label = le.fit_transform(y_test)
-
-    df_errados = pd.DataFrame(columns=['predicted'])
-    # errores dataset de entrenamiento
-    for i, (train_index, test_index) in enumerate(skf.split(X_train, y_train_label)):
-        model.fit(X_train.iloc[train_index], y_train_label[train_index])
-        y_est = model.predict(X_train.iloc[test_index])
-        errado = test_index[y_train_label[test_index] != y_est]
-        y_pred = le.inverse_transform(y_est)
-        y_p_df = pd.DataFrame(data=(y_pred), index=test_index, columns=['predicted'])
-        errado_idx = pd.Index(errado)
-        y_errados = y_p_df.loc[errado_idx].copy()
-        df_errados = pd.concat([df_errados, y_errados], ignore_index=False)
-    y_t = y_train.reset_index().copy()
-    df_errados = pd.merge(y_t, df_errados, how='inner', left_index=True, right_index=True)
-    df_errados.set_index('subject', inplace=True)
-
-    # errores dataset de prueba
-    y_test_pred = model.predict(X_test)
-    y_test_pred = le.inverse_transform(y_test_pred)
-    y_test_pred_df = pd.DataFrame(data=y_test_pred, index=y_test.index, columns=['predicted'])
-    test_errados_df = pd.merge(y_test, y_test_pred_df, left_index=True, right_index=True)
-    test_errados_df = test_errados_df[test_errados_df[label] != test_errados_df['predicted']]
-
-    df_errados = pd.concat([df_errados, test_errados_df], ignore_index=False)
-    return df_errados
 
 # Entrenamiento de mejor modelo
 def mejor_modelo(params, X, y, pre_pipe):
@@ -395,3 +362,55 @@ def get_best_model_sc(preprocessor, model_names, X_train, y_train_label, X_test,
     best_results = best_results.T
     best_results.set_index('model', inplace=True)
     return best_results
+
+# Funciones para selección de atributos
+def select_features_clf(X_train, y_train, threshold='1.5*mean', mi_threshold=0.1):
+    # Por selección por modelos
+    # SVC
+    X_train_df = X_train.copy()
+    lsvc = LinearSVC(random_state=72).fit(X_train_df, y_train)
+    model = SelectFromModel(lsvc, threshold=threshold, prefit=True)
+    X_new = model.transform(X_train_df)
+    features_lsvc = model.get_feature_names_out(input_features=X_train_df.columns)
+    features_svc = pd.DataFrame(data=np.ones_like(features_lsvc), columns=['features_lsvc'], index=features_lsvc)
+
+    # regresión logística l2
+    lr = LogisticRegression(penalty="l2", solver='saga', max_iter=10000, random_state=72).fit(X_train_df, y_train)
+    model = SelectFromModel(lr, threshold=threshold, prefit=True)
+    X_new = model.transform(X_train_df)
+    features_lrl2 = model.get_feature_names_out(input_features=X_train_df.columns)
+    features_l2 = pd.DataFrame(data=np.ones_like(features_lrl2), columns=['features_lrl2'], index=features_lrl2)
+
+    # regresión logística l1
+    lr = LogisticRegression(penalty="l1", solver='saga', max_iter=10000, random_state=72).fit(X_train_df, y_train)
+    model = SelectFromModel(lr, threshold=threshold, prefit=True)
+    X_new = model.transform(X_train_df)
+    features_lrl1 = model.get_feature_names_out(input_features=X_train_df.columns)
+    features_l1 = pd.DataFrame(data=np.ones_like(features_lrl1), columns=['features_lrl1'], index=features_lrl1)
+
+    # random forest
+    rf = RandomForestClassifier(random_state=72).fit(X_train_df, y_train)
+    model = SelectFromModel(rf, threshold=threshold, prefit=True)
+    X_new = model.transform(X_train_df)
+    features_rf = model.get_feature_names_out(input_features=X_train_df.columns)
+    features_rfo = pd.DataFrame(data=np.ones_like(features_rf), columns=['features_rf'], index=features_rf)
+
+    # anova
+    __, p_values = f_classif(X_train_df, y_train)
+    features_anova = pd.DataFrame(p_values, columns=['p_values'], index=X_train_df.columns)
+    features_anova = features_anova[features_anova['p_values']<0.05]
+    features_anova['features_an'] = 1
+
+    # información mutua
+    mi = mutual_info_classif(X_train_df, y_train)
+    features_mi = pd.DataFrame(mi, columns=['mutual information'], index=X_train_df.columns)
+    features_mi = features_mi[features_mi['mutual information']>mi_threshold]
+    features_mi['features_im'] = 1
+
+    # atributos seleccionados
+    features_sel = features_svc.join([features_l2, features_l1, features_rfo, features_anova, features_mi], how='outer')
+    features_sel.drop(['p_values','mutual information'], axis=1, inplace=True)
+    features_sel['total'] = features_sel.sum(axis=1)
+    features_sel = features_sel[features_sel['total']>=3]
+    lista_atributos = list(features_sel.index)
+    return lista_atributos
