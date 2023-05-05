@@ -11,23 +11,25 @@ from mne.channels import find_ch_adjacency, make_1020_channel_selections
 from mne.stats import spatio_temporal_cluster_test, ttest_ind_no_p, spatio_temporal_cluster_1samp_test
 from functools import partial, reduce
 
-def matrices_cluster(grupo, evocados_co, evocados_in):
+def matrices_cluster(grupo, evocados_co, evocados_in, tmin=0, tmax=None):
     # Diccionario con evocados de todos los sujetos, para ensayos congruentes e incongruentes
     congruentes = copy.deepcopy(evocados_co)
     incongruentes = copy.deepcopy(evocados_in)
-    tiempos = congruentes['22100'].times
     adjacency, canales = find_ch_adjacency(congruentes['22100'].info, "eeg")
 
     # Matrices de evocados (tiempos, canales) de sujetos condición 1
     grupo_co = {}
     grupo_in = {}
     for sujeto in grupo:
-        grupo_co[sujeto] = congruentes[sujeto]
-        grupo_in[sujeto] = incongruentes[sujeto]
+        grupo_co[sujeto] = congruentes[sujeto].crop(tmin=tmin, tmax=tmax)
+        grupo_in[sujeto] = incongruentes[sujeto].crop(tmin=tmin, tmax=tmax)
 
+    
     ga_grupo_co = mne.grand_average(list(grupo_co.values()), interpolate_bads=True, drop_bads=True)
     ga_grupo_in = mne.grand_average(list(grupo_in.values()), interpolate_bads=True, drop_bads=True)
 
+    sujeto = list(grupo_co.keys())[0]
+    tiempos = grupo_co[sujeto].times
     co_grupo = [grupo_co[i].data for i in grupo_co]
     co_grupo = np.reshape(co_grupo,(-1,len(canales), len(tiempos)))
     co_grupo = np.transpose(co_grupo, axes=(0,2,1))
@@ -101,7 +103,9 @@ def analisis_cluster_paired(X, adjacency):
 # Gráficas de clústeres
 def clusters_color(df, umbral=0.5, x_labels=8, cmap='hot', cbar=True):
     df = df[df['Time']>= 0]
-    df.set_index('Time', inplace=True)
+    df['Time'] = ((df['Time'].round(3))*1000).astype(int)
+    df.rename(columns={'Time':'Time (ms)'}, inplace=True)
+    df.set_index('Time (ms)', inplace=True)
     df = df.transpose()
     mask = df>umbral
     # cmap = sns.diverging_palette(h_neg=0 , h_pos=240, s=50, l=50, sep=1, n=6, center='light', as_cmap=False)
@@ -152,8 +156,9 @@ def lista_electrodos(df_p_values, umbral):
     lista = lista.sort_values(ascending=False)
     return lista, df
 
-# Función que obtiene los interavlos de tiempo en los que se presentan los clústeres
-def time_intervals(df, electrodos):
+# Función que obtiene los intervalos de tiempo en los que se presentan los clústeres
+def time_intervals(df, electrodos, min_duration=40):
+    min_muestras = np.round(min_duration*.256, decimals=0)+1
     df1 = df.copy()
     df1.reset_index(inplace=True)
     df1['match'] = True
@@ -162,15 +167,17 @@ def time_intervals(df, electrodos):
     df1['match'] = df1['match'].astype(int)
     df1['cuenta'] = 0
     df1['mayor_racha'] = 0
-    for i in range(0,len(df1)):
+    if df1.at[0,'match'] == 1:
+        df1.at[0,'cuenta'] = 1
+    for i in range(1,len(df1)):
         if df1.at[i,'match'] == 1:
             df1.at[i,'cuenta'] = 1 + df1.at[i-1,'cuenta']
         else:
             df1.at[i,'cuenta'] = 0
     for i in range(0,len(df1)-1):
-        if (df1.at[i,'cuenta'] > 11) & (df1.at[i+1,'cuenta']==0):
+        if (df1.at[i,'cuenta'] > min_muestras) & (df1.at[i+1,'cuenta']==0):
             df1.at[i,'mayor_racha'] = 1
-    if df1.at[len(df1)-1,'cuenta'] > 11:
+    if df1.at[len(df1)-1,'cuenta'] > min_muestras:
         df1.at[len(df1)-1,'mayor_racha'] = 1
     df1['t_inicial'] = 0.
     for i in df1.index:
@@ -199,6 +206,153 @@ def medidas(evoked, tmin, tmax):
     data.set_index('time',inplace=True)
     mean_ROI = data.mean()
     return mean_ROI
+
+# Función que entrega lista de ERPS por grupo y tipo de ensayo, y diccionarios de ERPs por tipo de ensayo
+def erps_grupos(canales, evocados_co, evocados_in, exbothsides, exparamilitar, exguerrilla, victim, control, tmin=0.0, tmax=0.796875):
+    exbothsides_co = {}
+    exbothsides_in = {}
+    exbothsides_dif = {}
+    for sujeto in exbothsides:
+        exbothsides_co[sujeto] = ROI_evoked(evocados_co[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        exbothsides_in[sujeto] = ROI_evoked(evocados_in[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        data_dif = exbothsides_co[sujeto].data - exbothsides_in[sujeto].data
+        exbothsides_dif[sujeto] = mne.EvokedArray(data=data_dif, info=exbothsides_in[sujeto].info, tmin=exbothsides_in[sujeto].tmin)
+    victim_co = {}
+    victim_in = {}
+    victim_dif = {}
+    for sujeto in victim:
+        victim_co[sujeto] = ROI_evoked(evocados_co[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        victim_in[sujeto] = ROI_evoked(evocados_in[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        data_dif = victim_co[sujeto].data - victim_in[sujeto].data
+        victim_dif[sujeto] = mne.EvokedArray(data=data_dif, info=victim_in[sujeto].info, tmin=victim_in[sujeto].tmin)
+    exparamilitar_co = {}
+    exparamilitar_in = {}
+    exparamilitar_dif = {}
+    for sujeto in exparamilitar:
+        exparamilitar_co[sujeto] = ROI_evoked(evocados_co[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        exparamilitar_in[sujeto] = ROI_evoked(evocados_in[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        data_dif = exparamilitar_co[sujeto].data - exparamilitar_in[sujeto].data
+        exparamilitar_dif[sujeto] = mne.EvokedArray(data=data_dif, info=exparamilitar_in[sujeto].info, tmin=exparamilitar_in[sujeto].tmin)
+    exguerrilla_co = {}
+    exguerrilla_in = {}
+    exguerrilla_dif = {}
+    for sujeto in exguerrilla:
+        exguerrilla_co[sujeto] = ROI_evoked(evocados_co[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        exguerrilla_in[sujeto] = ROI_evoked(evocados_in[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        data_dif = exguerrilla_co[sujeto].data - exguerrilla_in[sujeto].data
+        exguerrilla_dif[sujeto] = mne.EvokedArray(data=data_dif, info=exguerrilla_in[sujeto].info, tmin=exguerrilla_in[sujeto].tmin)
+    control_co = {}
+    control_in = {}
+    control_dif = {}
+    for sujeto in control:
+        control_co[sujeto] = ROI_evoked(evocados_co[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        control_in[sujeto] = ROI_evoked(evocados_in[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        data_dif = control_co[sujeto].data - control_in[sujeto].data
+        control_dif[sujeto] = mne.EvokedArray(data=data_dif, info=control_in[sujeto].info, tmin=control_in[sujeto].tmin)
+    ROI_co = {**exbothsides_co, **victim_co, **exparamilitar_co, **exguerrilla_co, **control_co}
+    ROI_in = {**exbothsides_in, **victim_in, **exparamilitar_in, **exguerrilla_in, **control_in}
+    ROI_dif = {**exbothsides_dif, **victim_dif, **exparamilitar_dif, **exguerrilla_dif, **control_dif}
+    return exbothsides_co, exbothsides_in, exbothsides_dif, victim_co, victim_in, victim_dif, exparamilitar_co, exparamilitar_in, exparamilitar_dif, exguerrilla_co, exguerrilla_in, exguerrilla_dif, control_co, control_in, control_dif, ROI_co, ROI_in, ROI_dif
+
+def graficos_grupos(canales, evocados_co, evocados_in, exbothsides, exparamilitar, exguerrilla, victim, control, t_init, duration, tmin=0.0, tmax=0.796875, pos_legend='lower left'):
+    __, __, __, victim_co, victim_in, __, exparamilitar_co, exparamilitar_in, __, exguerrilla_co, exguerrilla_in, __, __, __, __, __, __, __ = erps_grupos(canales, evocados_co, evocados_in, exbothsides, exparamilitar, exguerrilla, victim, control, tmin=0.0, tmax=0.796875)
+    victim_co_list = list(victim_co.values())
+    victim_in_list = list(victim_in.values())
+    exparamilitar_co_list = list(exparamilitar_co.values())
+    exparamilitar_in_list = list(exparamilitar_in.values())
+    exguerrilla_co_list = list(exguerrilla_co.values())
+    exguerrilla_in_list = list(exguerrilla_in.values())
+    erps = {'exparamilitar_co':exparamilitar_co_list, 'exparamilitar_in':exparamilitar_in_list, 'exguerrilla_co':exguerrilla_co_list, 'exguerrilla_in':exguerrilla_in_list, 'victim_co':victim_co_list, 'victim_in':victim_in_list}
+    fig = mne.viz.plot_compare_evokeds(evokeds=erps, colors=['#1f77b4ff', '#ff7f0eff', '#2ca02cff', '#d62728ff', '#9467bdff', '#8c564bff'], 
+                                        linestyles=['solid', 'solid','dashdot', 'dashdot', 'dashed', 'dashed'], axes=None, ci=None, truncate_yaxis=False, 
+                                        truncate_xaxis=False, show_sensors=False, legend=pos_legend, split_legend=False, combine=None, show=False)
+    ax = fig[0].gca()
+    rect = plt.Rectangle((t_init,-1.8), duration, 3.6, color='lightcyan')
+    ax.add_patch(rect)
+    return ax
+
+# Función que entrega lista de ERPS por grupo y tipo de ensayo, y diccionarios de ERPs por tipo de ensayo
+def erps_exc_vic(canales, evocados_co, evocados_in, excombatant, victim, control, tmin=0.0, tmax=0.796875):
+    victim_co = {}
+    victim_in = {}
+    victim_dif = {}
+    for sujeto in victim:
+        victim_co[sujeto] = ROI_evoked(evocados_co[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        victim_in[sujeto] = ROI_evoked(evocados_in[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        data_dif = victim_co[sujeto].data - victim_in[sujeto].data
+        victim_dif[sujeto] = mne.EvokedArray(data=data_dif, info=victim_in[sujeto].info, tmin=victim_in[sujeto].tmin)
+    excombatant_co = {}
+    excombatant_in = {}
+    excombatant_dif = {}
+    for sujeto in excombatant:
+        excombatant_co[sujeto] = ROI_evoked(evocados_co[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        excombatant_in[sujeto] = ROI_evoked(evocados_in[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        data_dif = excombatant_co[sujeto].data - excombatant_in[sujeto].data
+        excombatant_dif[sujeto] = mne.EvokedArray(data=data_dif, info=excombatant_in[sujeto].info, tmin=excombatant_in[sujeto].tmin)
+    control_co = {}
+    control_in = {}
+    control_dif = {}
+    for sujeto in control:
+        control_co[sujeto] = ROI_evoked(evocados_co[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        control_in[sujeto] = ROI_evoked(evocados_in[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        data_dif = control_co[sujeto].data - control_in[sujeto].data
+        control_dif[sujeto] = mne.EvokedArray(data=data_dif, info=control_in[sujeto].info, tmin=control_in[sujeto].tmin)
+    ROI_co = {**victim_co, **excombatant_co, **control_co}
+    ROI_in = {**victim_in, **excombatant_in, **control_in}
+    ROI_dif = {**victim_dif, **excombatant_dif, **control_dif}
+    return victim_co, victim_in, victim_dif, excombatant_co, excombatant_in, excombatant_dif, control_co, control_in, control_dif, ROI_co, ROI_in, ROI_dif
+
+def graficos_exc_vic(canales, evocados_co, evocados_in, excombatant, victim, control, t_init, duration, tmin=0.0, tmax=0.796875, pos_legend='lower left'):
+    victim_co, victim_in, __, excombatant_co, excombatant_in, __, __, __, __, __, __, __ = erps_exc_vic(canales, evocados_co, evocados_in, excombatant, victim, control, tmin=0.0, tmax=0.796875)
+    victim_co_list = list(victim_co.values())
+    victim_in_list = list(victim_in.values())
+    excombatant_co_list = list(excombatant_co.values())
+    excombatant_in_list = list(excombatant_in.values())
+    erps = {'excombatant_co':excombatant_co_list, 'excombatant_in':excombatant_in_list, 'victim_co':victim_co_list, 'victim_in':victim_in_list}
+    fig = mne.viz.plot_compare_evokeds(evokeds=erps, colors=['#1f77b4ff', '#ff7f0eff', '#2ca02cff', '#d62728ff'], 
+                                        linestyles=['solid', 'solid','dashdot', 'dashdot'], axes=None, ci=None, truncate_yaxis=False, 
+                                        truncate_xaxis=False, show_sensors=False, legend=pos_legend, split_legend=False, combine=None, show=False)
+    ax = fig[0].gca()
+    rect = plt.Rectangle((t_init,-1.8), duration, 3.6, color='lightcyan')
+    ax.add_patch(rect)
+    return ax
+
+def erps_self_vic(canales, evocados_co, evocados_in, no_victim, victim, tmin=0.0, tmax=0.796875):
+    victim_co = {}
+    victim_in = {}
+    victim_dif = {}
+    for sujeto in victim:
+        victim_co[sujeto] = ROI_evoked(evocados_co[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        victim_in[sujeto] = ROI_evoked(evocados_in[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        data_dif = victim_co[sujeto].data - victim_in[sujeto].data
+        victim_dif[sujeto] = mne.EvokedArray(data=data_dif, info=victim_in[sujeto].info, tmin=victim_in[sujeto].tmin)
+    no_victim_co = {}
+    no_victim_in = {}
+    no_victim_dif = {}
+    for sujeto in no_victim:
+        no_victim_co[sujeto] = ROI_evoked(evocados_co[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        no_victim_in[sujeto] = ROI_evoked(evocados_in[sujeto],canales).crop(tmin=tmin,tmax=tmax)
+        data_dif = no_victim_co[sujeto].data - no_victim_in[sujeto].data
+        no_victim_dif[sujeto] = mne.EvokedArray(data=data_dif, info=no_victim_in[sujeto].info, tmin=no_victim_in[sujeto].tmin)
+    ROI_co = {**victim_co, **no_victim_co}
+    ROI_in = {**victim_in, **no_victim_in}
+    ROI_dif = {**victim_dif, **no_victim_dif}
+    return victim_co, victim_in, victim_dif, no_victim_co, no_victim_in, no_victim_dif, ROI_co, ROI_in, ROI_dif
+
+def graficos_self_vic(canales, evocados_co, evocados_in, no_victim, victim, t_init, duration, tmin=0.0, tmax=0.796875, pos_legend='lower left'):
+    victim_co, victim_in, __, no_victim_co, no_victim_in, __, __, __, __ = erps_self_vic(canales, evocados_co, evocados_in, no_victim=no_victim, victim=victim, tmin=0.0, tmax=0.796875)
+    victim_co_list = list(victim_co.values())
+    victim_in_list = list(victim_in.values())
+    no_victim_co_list = list(no_victim_co.values())
+    no_victim_in_list = list(no_victim_in.values())
+    erps = {'no_victim_co':no_victim_co_list, 'no_victim_in':no_victim_in_list, 'victim_co':victim_co_list, 'victim_in':victim_in_list}
+    fig = mne.viz.plot_compare_evokeds(evokeds=erps, colors=['#1f77b4ff', '#ff7f0eff', '#2ca02cff', '#d62728ff'], 
+                                        linestyles=['solid', 'solid','dashdot', 'dashdot'], axes=None, ci=None, truncate_yaxis=False, 
+                                        truncate_xaxis=False, show_sensors=False, legend=pos_legend, split_legend=False, combine=None, show=False)
+    ax = fig[0].gca()
+    rect = plt.Rectangle((t_init,-1.8), duration, 3.6, color='lightcyan')
+    ax.add_patch(rect)
+    return ax
 
 # Función que entrega lista de ERPs de clústeres por nivel y tipo de ensayo, y diccionarios de ERPs por tipo de ensayo
 def erps_niveles(canales, evocados_co, evocados_in, positive, negative, neutral, tmin=0.0, tmax=0.796875):
@@ -255,13 +409,76 @@ def graficos_niveles(negative_co, neutral_co, positive_co, negative_in, neutral_
     figura_2 = mne.viz.plot_compare_evokeds(evokeds=erps_dif, colors=['#1f77b4ff', '#ff7f0eff', '#2ca02cff'], linestyles=['solid', 'dashdot', 'dashed'],axes=None, ci=0.95, truncate_yaxis=False, truncate_xaxis=False, show_sensors=False, legend=True, split_legend=False, combine=None, show=False)
     return figura_1, figura_2
 
+def batch_medidas_grupos(clusteres, evocados_co, evocados_in, exbothsides, exparamilitar, exguerrilla, victim, control):
+    medidas_clusteres = {}
+    for i in clusteres.index:
+        canales = clusteres['electrodos'][i].split(', ')
+        tmin = clusteres['t_inicial (s)'][i]
+        tmax = clusteres['t_final (s)'][i]
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __,ROI_co, ROI_in, ROI_dif = erps_grupos(canales=canales, evocados_co=evocados_co, evocados_in=evocados_in, exbothsides=exbothsides, exparamilitar=exparamilitar, exguerrilla=exguerrilla, victim=victim, control=control)
+        # Medidas clúster
+        medidas_clusteres[i] = pd.DataFrame(columns= ['subject','mean_co', 'mean_in', 'dif_co_in'])
+        for k in ROI_co.keys():
+            mean_ROI_co = medidas(ROI_co[k], tmin=tmin, tmax=tmax)
+            mean_ROI_in = medidas(ROI_in[k], tmin=tmin, tmax=tmax)
+            mean_ROI_dif = medidas(ROI_dif[k], tmin=tmin, tmax=tmax)
+            medidas_clusteres[i] =  medidas_clusteres[i].append({'subject': k, 'mean_co': mean_ROI_co[0], 'mean_in': mean_ROI_in[0], 'dif_co_in': mean_ROI_dif[0]}, ignore_index=True)
+        # Construcción dataframe de medidas de todos los clústeres
+    for k in medidas_clusteres.keys():
+        num_cluster = str(k)
+        medidas_clusteres[k].rename(columns={'mean_co':'mean_co_'+num_cluster,'mean_in':'mean_in_'+num_cluster,'dif_co_in':'dif_co_in_'+num_cluster}, inplace=True)
+    df_medidas = reduce(lambda  left,right: pd.merge(left,right,on=['subject'],how='inner'),medidas_clusteres.values())
+    return df_medidas
+
+def batch_medidas_exc_vic(clusteres, evocados_co, evocados_in, excombatant, victim, control):
+    medidas_clusteres = {}
+    for i in clusteres.index:
+        canales = clusteres['electrodos'][i].split(', ')
+        tmin = clusteres['t_inicial (s)'][i]
+        tmax = clusteres['t_final (s)'][i]
+        __, __, __, __, __, __, __, __, __,ROI_co, ROI_in, ROI_dif = erps_exc_vic(canales=canales, evocados_co=evocados_co, evocados_in=evocados_in, excombatant=excombatant, victim=victim, control=control)
+        # Medidas clúster
+        medidas_clusteres[i] = pd.DataFrame(columns= ['subject','mean_co', 'mean_in', 'dif_co_in'])
+        for k in ROI_co.keys():
+            mean_ROI_co = medidas(ROI_co[k], tmin=tmin, tmax=tmax)
+            mean_ROI_in = medidas(ROI_in[k], tmin=tmin, tmax=tmax)
+            mean_ROI_dif = medidas(ROI_dif[k], tmin=tmin, tmax=tmax)
+            medidas_clusteres[i] =  medidas_clusteres[i].append({'subject': k, 'mean_co': mean_ROI_co[0], 'mean_in': mean_ROI_in[0], 'dif_co_in': mean_ROI_dif[0]}, ignore_index=True)
+        # Construcción dataframe de medidas de todos los clústeres
+    for k in medidas_clusteres.keys():
+        num_cluster = str(k)
+        medidas_clusteres[k].rename(columns={'mean_co':'mean_co_'+num_cluster,'mean_in':'mean_in_'+num_cluster,'dif_co_in':'dif_co_in_'+num_cluster}, inplace=True)
+    df_medidas = reduce(lambda  left,right: pd.merge(left,right,on=['subject'],how='inner'),medidas_clusteres.values())
+    return df_medidas
+
+def batch_medidas_self_vic(clusteres, evocados_co, evocados_in, no_victim, victim):
+    medidas_clusteres = {}
+    for i in clusteres.index:
+        canales = clusteres['electrodos'][i].split(', ')
+        tmin = clusteres['t_inicial (s)'][i]
+        tmax = clusteres['t_final (s)'][i]
+        __, __, __, __, __, __, ROI_co, ROI_in, ROI_dif = erps_self_vic(canales=canales, evocados_co=evocados_co, evocados_in=evocados_in, no_victim=no_victim, victim=victim)
+        # Medidas clúster
+        medidas_clusteres[i] = pd.DataFrame(columns= ['subject','mean_co', 'mean_in', 'dif_co_in'])
+        for k in ROI_co.keys():
+            mean_ROI_co = medidas(ROI_co[k], tmin=tmin, tmax=tmax)
+            mean_ROI_in = medidas(ROI_in[k], tmin=tmin, tmax=tmax)
+            mean_ROI_dif = medidas(ROI_dif[k], tmin=tmin, tmax=tmax)
+            medidas_clusteres[i] =  medidas_clusteres[i].append({'subject': k, 'mean_co': mean_ROI_co[0], 'mean_in': mean_ROI_in[0], 'dif_co_in': mean_ROI_dif[0]}, ignore_index=True)
+        # Construcción dataframe de medidas de todos los clústeres
+    for k in medidas_clusteres.keys():
+        num_cluster = str(k)
+        medidas_clusteres[k].rename(columns={'mean_co':'mean_co_'+num_cluster,'mean_in':'mean_in_'+num_cluster,'dif_co_in':'dif_co_in_'+num_cluster}, inplace=True)
+    df_medidas = reduce(lambda  left,right: pd.merge(left,right,on=['subject'],how='inner'),medidas_clusteres.values())
+    return df_medidas
+
 def batch_medidas_niveles(clusteres, evocados_co, evocados_in, positive, negative, neutral):
     medidas_clusteres = {}
     for i in clusteres.index:
         canales = clusteres['electrodos'][i].split(', ')
         tmin = clusteres['t_inicial (s)'][i]
         tmax = clusteres['t_final (s)'][i]
-        __, __, __, __, __, __, __, __, __, ROI_co, ROI_in, ROI_dif = erps_niveles(canales=canales, evocados_co=evocados_co, evocados_in=evocados_in, positive=positive, negative=negative, neutral=neutral)
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, ROI_co, ROI_in, ROI_dif = erps_niveles(canales=canales, evocados_co=evocados_co, evocados_in=evocados_in, positive=positive, negative=negative, neutral=neutral)
         # Medidas clúster
         medidas_clusteres[i] = pd.DataFrame(columns= ['subject','mean_co', 'mean_in', 'dif_co_in'])
         for k in ROI_co.keys():
