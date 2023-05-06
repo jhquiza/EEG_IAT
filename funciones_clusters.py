@@ -271,6 +271,29 @@ def graficos_grupos(canales, evocados_co, evocados_in, exbothsides, exparamilita
     ax.add_patch(rect)
     return ax
 
+def graficos_grupos_control(canales, evocados_co, evocados_in, exbothsides, exparamilitar, exguerrilla, victim, control, t_init, duration, tmin=0.0, tmax=0.796875, pos_legend='lower left'):
+    __, __, __, victim_co, victim_in, __, exparamilitar_co, exparamilitar_in, __, exguerrilla_co, exguerrilla_in, __, control_co, control_in, __, __, __, __ = erps_grupos(canales, evocados_co, evocados_in, exbothsides, exparamilitar, exguerrilla, victim, control, tmin=0.0, tmax=0.796875)
+    victim_co_list = list(victim_co.values())
+    victim_in_list = list(victim_in.values())
+    exparamilitar_co_list = list(exparamilitar_co.values())
+    exparamilitar_in_list = list(exparamilitar_in.values())
+    exguerrilla_co_list = list(exguerrilla_co.values())
+    exguerrilla_in_list = list(exguerrilla_in.values())
+    control_co_list = list(control_co.values())
+    control_in_list = list(control_in.values())
+    erps = {'exparamilitar_co':exparamilitar_co_list, 'exparamilitar_in':exparamilitar_in_list, 
+            'exguerrilla_co':exguerrilla_co_list, 'exguerrilla_in':exguerrilla_in_list, 
+            'victim_co':victim_co_list, 'victim_in':victim_in_list, 
+            'control_co':control_co_list, 'control_in':control_in_list}
+    fig = mne.viz.plot_compare_evokeds(evokeds=erps, 
+                                       linestyles=['solid', 'solid','dashdot', 'dashdot', 'dashed', 'dashed', 'dotted', 'dotted'], 
+                                       axes=None, ci=None, truncate_yaxis=False, truncate_xaxis=False, show_sensors=False, 
+                                       legend=pos_legend, split_legend=False, combine=None, show=False)
+    ax = fig[0].gca()
+    rect = plt.Rectangle((t_init,-1.8), duration, 3.6, color='lightcyan')
+    ax.add_patch(rect)
+    return ax
+
 # Función que entrega lista de ERPS por grupo y tipo de ensayo, y diccionarios de ERPs por tipo de ensayo
 def erps_exc_vic(canales, evocados_co, evocados_in, excombatant, victim, control, tmin=0.0, tmax=0.796875):
     victim_co = {}
