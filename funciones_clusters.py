@@ -370,8 +370,9 @@ def graficos_self_vic(canales, evocados_co, evocados_in, no_victim, victim, t_in
     no_victim_in_list = list(no_victim_in.values())
     erps = {'no_victim_co':no_victim_co_list, 'no_victim_in':no_victim_in_list, 'victim_co':victim_co_list, 'victim_in':victim_in_list}
     fig = mne.viz.plot_compare_evokeds(evokeds=erps, colors=['#1f77b4ff', '#ff7f0eff', '#2ca02cff', '#d62728ff'], 
-                                        linestyles=['solid', 'solid','dashdot', 'dashdot'], axes=None, ci=None, truncate_yaxis=False, 
-                                        truncate_xaxis=False, show_sensors=False, legend=pos_legend, split_legend=False, combine=None, show=False)
+                                        linestyles=['solid', 'solid','dashdot', 'dashdot'], axes=None, ci=None, 
+                                        truncate_yaxis=False, truncate_xaxis=False, show_sensors=False, legend=pos_legend, 
+                                        split_legend=False, combine=None, show=False)
     ax = fig[0].gca()
     rect = plt.Rectangle((t_init,-1.8), duration, 3.6, color='lightcyan')
     ax.add_patch(rect)
@@ -407,13 +408,11 @@ def erps_niveles(canales, evocados_co, evocados_in, positive, negative, neutral,
     ROI_co = {**negative_co,**neutral_co,**positive_co}
     ROI_in = {**negative_in,**neutral_in,**positive_in}
     ROI_dif = {**negative_dif,**neutral_dif,**positive_dif}
-    return negative_co, neutral_co, positive_co, negative_in, neutral_in, positive_in,negative_dif,neutral_dif,positive_dif, ROI_co, ROI_in, ROI_dif
+    return negative_co, negative_in, negative_dif, neutral_co, neutral_in, neutral_dif, positive_co, positive_in,positive_dif, ROI_co, ROI_in, ROI_dif
 
 # Función que entrega gráficos de ERPs de clústeres por nivel y tipo de ensayo
-def graficos_niveles(negative_co, neutral_co, positive_co, negative_in, neutral_in, positive_in,negative_dif,neutral_dif,positive_dif):
-    # Configuro parámetros de gráficos
-    params = {'axes.labelsize':20, 'axes.titlesize': 20, 'axes.grid':True, 'axes.grid.axis':'both', 'axes.grid.which':'both','legend.fontsize':20, 'legend.loc': 'best', 'lines.linewidth': 2.0 ,'xtick.labelsize': 15, 'xtick.minor.visible': True, 'ytick.labelsize': 15, 'ytick.minor.visible': True}
-    plt.rcParams.update(params)
+def graficos_niveles(canales, evocados_co, evocados_in, positive, negative, neutral, t_init, duration, tmin=0.0, tmax=0.796875, pos_legend='lower left'):
+    negative_co, negative_in, __, neutral_co, neutral_in, __, positive_co, positive_in, __, __, __, __ = erps_niveles(canales, evocados_co, evocados_in, positive, negative, neutral, tmin=tmin, tmax=tmax)
     # Listas de evocados de clústeres por grupos
     negative_co_list = list(negative_co.values())
     neutral_co_list = list(neutral_co.values())
@@ -421,17 +420,19 @@ def graficos_niveles(negative_co, neutral_co, positive_co, negative_in, neutral_
     negative_in_list = list(negative_in.values())
     neutral_in_list = list(neutral_in.values())
     positive_in_list = list(positive_in.values())
-    negative_dif_list = list(negative_dif.values())
-    neutral_dif_list = list(neutral_dif.values())
-    positive_dif_list = list(positive_dif.values())
-    erps = {'negative_co':negative_co_list, 'neutral_co':neutral_co_list, 'positive_co':positive_co_list, 'negative_in':negative_in_list, 'neutral_in':neutral_in_list, 'positive_in':positive_in_list}
+    erps = {'negative_co':negative_co_list, 'negative_in':negative_in_list, 
+            'neutral_co':neutral_co_list,'neutral_in':neutral_in_list,
+            'positive_co':positive_co_list, 'positive_in':positive_in_list}
     # Gráfico de ensayos congruentes e incongruentes, con o sin intervalos de confianza
-    figura_1 = mne.viz.plot_compare_evokeds(evokeds=erps, colors=['#1f77b4ff', '#ff7f0eff', '#2ca02cff', '#d62728ff', '#9467bdff', '#8c564bff'], linestyles=['solid', 'dashdot', 'dashed', 'solid', 'dashdot', 'dashed'], axes=None, ci=None, truncate_yaxis=False, truncate_xaxis=False, show_sensors=False, split_legend=False, combine=None, show=False)
-    # Gráfico de diferencias intervalos de confianza
-    erps_dif = {'negative_dif':negative_dif_list, 'neutral_dif':neutral_dif_list, 'positive_dif':positive_dif_list}
-    figura_2 = mne.viz.plot_compare_evokeds(evokeds=erps_dif, colors=['#1f77b4ff', '#ff7f0eff', '#2ca02cff'], linestyles=['solid', 'dashdot', 'dashed'],axes=None, ci=0.95, truncate_yaxis=False, truncate_xaxis=False, show_sensors=False, legend=True, split_legend=False, combine=None, show=False)
-    return figura_1, figura_2
-
+    fig = mne.viz.plot_compare_evokeds(evokeds=erps, colors=['#1f77b4ff', '#ff7f0eff', '#2ca02cff', '#d62728ff', '#9467bdff', '#8c564bff'], 
+                                       linestyles=['solid', 'solid', 'dashdot', 'dashdot','dashed',  'dashed'], 
+                                       axes=None, ci=None, truncate_yaxis=False, truncate_xaxis=False, show_sensors=False, 
+                                       legend=pos_legend, split_legend=False, combine=None, show=False)
+    ax = fig[0].gca()
+    rect = plt.Rectangle((t_init,-1.8), duration, 3.6, color='lightcyan')
+    ax.add_patch(rect)
+    return ax
+    
 def batch_medidas_grupos(clusteres, evocados_co, evocados_in, exbothsides, exparamilitar, exguerrilla, victim, control):
     medidas_clusteres = {}
     for i in clusteres.index:
@@ -501,7 +502,7 @@ def batch_medidas_niveles(clusteres, evocados_co, evocados_in, positive, negativ
         canales = clusteres['electrodos'][i].split(', ')
         tmin = clusteres['t_inicial (s)'][i]
         tmax = clusteres['t_final (s)'][i]
-        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, ROI_co, ROI_in, ROI_dif = erps_niveles(canales=canales, evocados_co=evocados_co, evocados_in=evocados_in, positive=positive, negative=negative, neutral=neutral)
+        __, __, __, __, __, __, __, __, __, ROI_co, ROI_in, ROI_dif = erps_niveles(canales=canales, evocados_co=evocados_co, evocados_in=evocados_in, positive=positive, negative=negative, neutral=neutral)
         # Medidas clúster
         medidas_clusteres[i] = pd.DataFrame(columns= ['subject','mean_co', 'mean_in', 'dif_co_in'])
         for k in ROI_co.keys():
