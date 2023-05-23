@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split, cross_val_score, Stratifie
 from sklearn.pipeline import Pipeline
 from sklearn.cluster import KMeans, SpectralClustering
 from sklearn.mixture import GaussianMixture
-from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
+from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score, f1_score
 from sklearn.inspection import permutation_importance
 from mango import Tuner, scheduler
 from mango.domain.distribution import loguniform
@@ -17,6 +17,10 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC, LinearSVC
 from sklearn.feature_selection import SelectFromModel, f_classif, mutual_info_classif
 from xgboost import XGBClassifier
+from scipy.stats import spearmanr
+from scipy.cluster import hierarchy
+from scipy.spatial.distance import squareform
+from collections import defaultdict
 
 # Ajuste modelos de clustering KMeans
 def clusters_kmeans(data, max_clusters=10):
@@ -426,3 +430,128 @@ def select_features_clf(X_train, y_train, threshold='1.5*mean', mi_threshold=0.1
     features_sel = features_sel[features_sel['total']>=3]
     lista_atributos = list(features_sel.index)
     return lista_atributos
+
+def uncorrelated_features(X_train, X_test, threshold=0.5):
+    corr = spearmanr(X_train).correlation
+    # Ensure the correlation matrix is symmetric
+    corr = (corr + corr.T) / 2
+    np.fill_diagonal(corr, 1)
+    # We convert the correlation matrix to a distance matrix before performing
+    # hierarchical clustering using Ward's linkage.
+    distance_matrix = 1 - np.abs(corr)
+    dist_linkage = hierarchy.ward(squareform(distance_matrix))
+    cluster_ids = hierarchy.fcluster(dist_linkage, 0.5, criterion="distance")
+    cluster_id_to_feature_ids = defaultdict(list)
+    for idx, cluster_id in enumerate(cluster_ids):
+        cluster_id_to_feature_ids[cluster_id].append(idx)
+    selected_features = [v[0] for v in cluster_id_to_feature_ids.values()]
+    X_train_unc = X_train[X_train.columns[selected_features]]
+    X_test_unc = X_test[X_test.columns[selected_features]]
+    return X_train_unc, X_test_unc, selected_features
+
+# Función para obtener el mejor modelo de clasificación sin preprocesar
+def get_best_model_np_kfold(X_train, y_train_label, X_test, y_test_label):
+    param_space_lr = dict(C=loguniform(-4,2), penalty=['l1','l2'])
+    param_space_knn = dict(n_neighbors=np.arange(1, 20), weights=['uniform','distance'], p=[1,2])
+    param_space_rf = dict(n_estimators=np.arange(1, 100), ccp_alpha=loguniform(-4,6))
+    param_space_gb = dict(n_estimators=np.arange(1, 100), ccp_alpha=loguniform(-4,6), subsample=uniform(0,1))
+    param_space_svc = dict(gamma=uniform(0, 1), C=loguniform(-4,8), kernel=['poly','rbf','sigmoid'], degree=range(1,5))
+    param_space_xg =dict(n_estimators=range(1,100), max_depth=range(3,10), subsample=uniform(0.1,0.9), eta=uniform(0,1), 
+                         colsample_bytree=uniform(0.1,0.9))
+    fold_results = pd.DataFrame(index=['model', 'hiperparameters', 'f1-weighted score'])
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=1)
+    for train, test in cv.split(X_train, y_train_label):
+        # features selection
+        X_train_fold = X_train.iloc[train]
+        X_test_fold = X_train.iloc[test]
+        y_train_fold = y_train_label.iloc[train]
+        y_test_fold = y_train_label.iloc[test]
+        features = select_features_clf(X_train=X_train_fold, y_train=y_train_fold, 
+                                       threshold='1.5*mean', mi_threshold=0.1)
+        X_train_fold = X_train_fold[features]
+        X_test_fold = X_test_fold[features]
+        # uncorrelated features selection
+        X_train_fold_sel, X_test_fold_sel, features_selected = uncorrelated_features(X_train=X_train_fold, 
+                                                                                     X_test=X_test_fold, 
+                                                                                     threshold=0.5)
+        def objective_lr(args_list):
+            results = []
+            for hyper_par in args_list:
+                clf = LogisticRegression(solver='saga', max_iter=10000, random_state=1)
+                clf.set_params(**hyper_par)
+                clf_fit=clf.fit(X_train_fold_sel, y_train_fold) 
+                result = f1_score(y_test_fold, clf_fit.predict(X_test_fold_sel), average='weighted')
+                results.append(result)
+            return results
+
+        def objective_knn(args_list):
+            results = []
+            for hyper_par in args_list:
+                clf = KNeighborsClassifier()
+                clf.set_params(**hyper_par)
+                clf_fit=clf.fit(X_train_fold_sel, y_train_fold) 
+                result = f1_score(y_test_fold, clf_fit.predict(X_test_fold_sel), average='weighted')
+                results.append(result)
+            return results
+
+        def objective_rf(args_list):
+            results = []
+            for hyper_par in args_list:
+                clf = RandomForestClassifier(random_state=1)
+                clf.set_params(**hyper_par)
+                clf_fit=clf.fit(X_train_fold_sel, y_train_fold) 
+                result = f1_score(y_test_fold, clf_fit.predict(X_test_fold_sel), average='weighted')
+                results.append(result)
+            return results
+
+        def objective_gb(args_list):
+            results = []
+            for hyper_par in args_list:
+                clf = GradientBoostingClassifier(random_state=1)
+                clf.set_params(**hyper_par)
+                clf_fit=clf.fit(X_train_fold_sel, y_train_fold) 
+                result = f1_score(y_test_fold, clf_fit.predict(X_test_fold_sel), average='weighted')
+                results.append(result)
+            return results
+
+        def objective_svc(args_list):
+            results = []
+            for hyper_par in args_list:
+                clf = SVC(random_state=1)
+                clf.set_params(**hyper_par)
+                clf_fit=clf.fit(X_train_fold_sel, y_train_fold) 
+                result = f1_score(y_test_fold, clf_fit.predict(X_test_fold_sel), average='weighted')
+                results.append(result)
+            return results
+
+        def objective_xg(args_list):
+            results = []
+            for hyper_par in args_list:
+                clf = XGBClassifier()
+                clf.set_params(**hyper_par)
+                clf_fit=clf.fit(X_train_fold_sel, y_train_fold) 
+                result = f1_score(y_test_fold, clf_fit.predict(X_test_fold_sel), average='weighted')
+                results.append(result)
+            return results
+
+        param_space_list = [param_space_lr, param_space_knn, param_space_rf, param_space_gb, param_space_svc, param_space_xg]
+        objective_list = [objective_lr, objective_knn, objective_rf, objective_gb, objective_svc, objective_xg]
+        model_names = ['Logistic Regression', 'KNN', 'Random Forest', 'Gradient Boosting', 'SVC', 'XGBoost']
+        model_list = [LogisticRegression(solver='saga', max_iter=10000, random_state=1), KNeighborsClassifier(),
+                    RandomForestClassifier(random_state=1), GradientBoostingClassifier(random_state=1), 
+                    SVC(random_state=1), XGBClassifier()]
+        for i in range(len(param_space_list)):
+            param_space = param_space_list[i]
+            objective = objective_list[i]
+            model_name = model_names[i]
+            conf_dict = dict(num_iteration=40, domain_size=10000, initial_random=3)
+            tuner = Tuner(param_space, objective, conf_dict)
+            model_tuned = tuner.maximize()
+            model_tuned.fit(X_train_fold_sel, y_train_fold)
+            test_score = f1_score(y_test_fold, model_tuned.predict(X_test_fold_sel), average='weighted')
+            print(tuner)
+            temp = pd.DataFrame(data=[model_name, model_tuned['best_params'], model_tuned['best_score'], test_score],
+                                index=['model', 'hiperparameters', 'f1-weighted train score', 'f1-weighted test score'])
+            fold_results = pd.concat([fold_results, temp], axis=1)
+            fold_results = fold_results.T
+    return fold_results
